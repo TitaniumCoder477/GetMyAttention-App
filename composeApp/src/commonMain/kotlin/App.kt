@@ -47,6 +47,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
@@ -92,17 +93,16 @@ fun App() {
             withContext(Dispatchers.IO) {
                 while (true) {
                     try {
-                        val response = client.get("$url/schedules")
-                        val jsonString = response.bodyAsText()
+                        val jsonString = client.get("$url/schedules").bodyAsText()
                         val jsonMap = Json.decodeFromString<Map<String, List<String>>>(jsonString)
-                        jsonMap["schedules"]?.forEach { value ->
-                            if (!scheduledAlerts.contains(value)) {
-                                scheduledAlerts[value] = false
+                        jsonMap["schedules"]?.forEach { timestamp ->
+                            if (!scheduledAlerts.contains(timestamp)) {
+                                scheduledAlerts[timestamp] = false
                             }
                         }
-                        scheduledAlerts.forEach {
-                            if (jsonMap["schedules"]?.contains(it.key) == false) {
-                                scheduledAlerts.remove(it.key)
+                        scheduledAlerts.keys.forEach { timestamp ->
+                            if (jsonMap["schedules"]?.contains(timestamp) == false) {
+                                scheduledAlerts.remove(timestamp)
                             }
                         }
                         delay(1000)
@@ -114,7 +114,7 @@ fun App() {
         }
 
         Surface(modifier = Modifier) {
-            Column {
+            Column(modifier = Modifier) {
                 ScheduledAlerts(
                     modifier = Modifier
                         .weight(1f, fill = true)
@@ -122,7 +122,7 @@ fun App() {
                         .fillMaxHeight(0.70f)
                         .border(BorderStroke(2.dp, SolidColor(Color.Blue)))
                         .verticalScroll(rememberScrollState()),
-                    timestamps = scheduledAlerts,
+                    scheduledAlerts = scheduledAlerts,
                     onCheckedChange = { timestamp, isChecked ->
                         scheduledAlerts[timestamp] = isChecked
                     }
@@ -135,17 +135,18 @@ fun App() {
                     scope = scope,
                     client = client,
                     nudgeButtonClick = { minutes ->
-                        val checkedScheduledAlerts = scheduledAlerts.filterValues { it }
-                        if (checkedScheduledAlerts.isEmpty()) {
-                            val newTimestamp = Clock.System.now()
+                        val scheduledAlertsThatAreChecked = scheduledAlerts.filterValues { it }
+                        if (scheduledAlertsThatAreChecked.isEmpty()) {
+                            val nudgedTimestamp = Clock.System.now()
                                 .plus(minutes, DateTimeUnit.MINUTE)
                                 .toLocalDateTime(TimeZone.currentSystemDefault())
                                 .format(LocalDateTime.Formats.ISO)
+                            //TODO: This needs to get moved into the Add button where it makes more sense
                             scope.launch {
                                 withContext(Dispatchers.IO) {
                                     try {
                                         val message = client
-                                            .post("$url/schedule?timestamp=$newTimestamp")
+                                            .post("$url/schedule?timestamp=$nudgedTimestamp")
                                             .bodyAsText()
                                         commonLogger.info { message }
                                     } catch (e: Exception) {
@@ -154,26 +155,69 @@ fun App() {
                                 }
                             }
                         } else {
-                            checkedScheduledAlerts.forEach { checkedItem ->
-                                val newTimestamp = LocalDateTime.parse(checkedItem.key)
-                                    .toInstant(TimeZone.currentSystemDefault())
-                                    .plus(minutes, DateTimeUnit.MINUTE)
-                                    .toLocalDateTime(TimeZone.currentSystemDefault())
-                                    .format(LocalDateTime.Formats.ISO)
-                                scheduledAlerts[newTimestamp] = true
-                                scheduledAlerts.remove(checkedItem.key)
+                            scheduledAlertsThatAreChecked.keys.forEach { timestamp ->
+                                val outputFormat = DateTimeComponents.Format {
+                                    date(LocalDate.Formats.ISO)
+                                    char('T')
+                                    hour(); char(':'); minute(); char(':'); second()
+                                    offset(UtcOffset.Formats.ISO)
+                                }
+                                try {
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            try {
+                                                val message = client
+                                                    .post("$url/delete?timestamp=$timestamp")
+                                                    .bodyAsText()
+                                                commonLogger.info { message }
+                                            } catch (e: Exception) {
+                                                commonLogger.error { e.message }
+                                            }
+                                        }
+                                    }
+                                    val nudgedTimestamp = Instant.parse(timestamp)
+                                        .plus(minutes, DateTimeUnit.MINUTE)
+                                        .toLocalDateTime(TimeZone.currentSystemDefault())
+                                    val outputFormatted = outputFormat.format {
+                                        with(TimeZone.currentSystemDefault()) {
+                                            setDateTime(nudgedTimestamp)
+                                            setOffset(
+                                                offsetAt(
+                                                    nudgedTimestamp.toInstant(
+                                                        TimeZone.currentSystemDefault()
+                                                    )
+                                                )
+                                            )
+                                        }
+                                    }
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            try {
+                                                val message = client
+                                                    .post("$url/schedule?timestamp=$outputFormatted")
+                                                    .bodyAsText()
+                                                scheduledAlerts["$outputFormatted"] = true
+                                                commonLogger.info { message }
+                                            } catch (e: Exception) {
+                                                commonLogger.error { e.message }
+                                            }
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    commonLogger.error { e.message }
+                                }
                             }
                         }
                     },
                     deleteButtonClick = {
                         scheduledAlerts
                             .filterValues { it }
-                            .forEach { checkedItem ->
+                            .keys.forEach { timestamp ->
                                 scope.launch {
                                     withContext(Dispatchers.IO) {
                                         try {
                                             val message = client
-                                                .post("$url/delete?timestamp=${checkedItem.key}")
+                                                .post("$url/delete?timestamp=$timestamp")
                                                 .bodyAsText()
                                             commonLogger.info { message }
                                         } catch (e: Exception) {
@@ -388,11 +432,11 @@ private fun Dashboard(
 @Composable
 private fun ScheduledAlerts(
     modifier: Modifier = Modifier,
-    timestamps: Map<String, Boolean> = emptyMap(),
+    scheduledAlerts: Map<String, Boolean> = emptyMap(),
     onCheckedChange: (String, Boolean) -> Unit
 ) {
     Column(modifier = modifier) {
-        timestamps.forEach {
+        scheduledAlerts.forEach {
             ScheduledAlert(
                 timestamp = it.key,
                 checked = it.value,
