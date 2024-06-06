@@ -1,7 +1,4 @@
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,6 +14,7 @@ import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.material.TextField
+import androidx.compose.material.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -28,7 +26,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -52,7 +49,6 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.UtcOffset
-import kotlinx.datetime.format
 import kotlinx.datetime.format.DateTimeComponents
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
@@ -78,7 +74,11 @@ val commonLogger = KotlinLogging.logger {}
 @Composable
 fun App() {
 
-    MaterialTheme {
+    MaterialTheme(
+        colors = MaterialTheme.colors.copy(
+            primary = Color(0xFFBF5700)
+        )
+    ) {
         var statusMessage by remember { mutableStateOf("") }
         val scheduledAlerts = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -113,6 +113,36 @@ fun App() {
             }
         }
 
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                while (true) {
+                    try {
+                        val jsonString = client.get("$url/schedules").bodyAsText()
+                        val jsonMap = Json.decodeFromString<Map<String, List<String>>>(jsonString)
+                        jsonMap["schedules"]?.forEach { timestamp ->
+                            if (Instant.parse(timestamp) < Clock.System.now()) {
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        try {
+                                            val message = client
+                                                .post("$url/delete?timestamp=$timestamp")
+                                                .bodyAsText()
+                                            commonLogger.info { message }
+                                        } catch (e: Exception) {
+                                            commonLogger.error { e.message }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        delay(5000)
+                    } catch(e: Exception) {
+                        commonLogger.error { e.message }
+                    }
+                }
+            }
+        }
+
         Surface(modifier = Modifier) {
             Column(modifier = Modifier) {
                 ScheduledAlerts(
@@ -120,13 +150,40 @@ fun App() {
                         .weight(1f, fill = true)
                         .padding(5.dp)
                         .fillMaxHeight(0.70f)
-                        .border(BorderStroke(2.dp, SolidColor(Color.Blue)))
+                        //.border(BorderStroke(2.dp, SolidColor(Color.Blue)))
                         .verticalScroll(rememberScrollState()),
                     scheduledAlerts = scheduledAlerts,
                     onCheckedChange = { timestamp, isChecked ->
                         scheduledAlerts[timestamp] = isChecked
                     }
                 )
+
+                var nudgeValue by rememberSaveable { mutableStateOf(0) }
+                var timestampFormattedForOutput by rememberSaveable { mutableStateOf("") }
+                var txtFldValue by rememberSaveable { mutableStateOf("") }
+                var txtFldColorState by rememberSaveable { mutableStateOf(true) }
+                val nudgeMinutesRegex = Regex("""([-+]?\d+) ?[mM]""")
+                val nudgeHoursRegex = Regex("""([-+]?\d+\.?\d*+) ?[hH]""")
+                val nudgeDaysRegex = Regex("""([-+]?\d+) ?[dD]""")
+                val inputFormatRequired = LocalDateTime.Format {
+                    monthNumber(padding = Padding.NONE)
+                    char('/')
+                    dayOfMonth(padding = Padding.NONE)
+                    char('/')
+                    yearTwoDigits(2000)
+                    char(' ')
+                    hour();
+                    char(':');
+                    minute()
+                }
+
+                val outputFormatDesired = DateTimeComponents.Format {
+                    date(LocalDate.Formats.ISO)
+                    char('T')
+                    hour(); char(':'); minute(); char(':'); second()
+                    offset(UtcOffset.Formats.ISO)
+                }
+
                 Dashboard(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -134,19 +191,84 @@ fun App() {
                         .padding(start = 5.dp, top = 5.dp, end = 5.dp),
                     scope = scope,
                     client = client,
-                    nudgeButtonClick = { minutes ->
-                        val scheduledAlertsThatAreChecked = scheduledAlerts.filterValues { it }
-                        if (scheduledAlertsThatAreChecked.isEmpty()) {
-                            val nudgedTimestamp = Clock.System.now()
-                                .plus(minutes, DateTimeUnit.MINUTE)
-                                .toLocalDateTime(TimeZone.currentSystemDefault())
-                                .format(LocalDateTime.Formats.ISO)
-                            //TODO: This needs to get moved into the Add button where it makes more sense
+                    txtFldValue = txtFldValue,
+                    txtFldColorState = txtFldColorState,
+                    onValueChange = { changedTxtFldValue ->
+                        txtFldValue = changedTxtFldValue
+                        timestampFormattedForOutput = ""
+                        nudgeValue = 0
+                        try {
+                            val minutesInstances = nudgeMinutesRegex.matchEntire(txtFldValue)
+                            val hoursInstances = nudgeHoursRegex.matchEntire(txtFldValue)
+                            val daysInstances = nudgeDaysRegex.matchEntire(txtFldValue)
+                            if (minutesInstances != null) {
+                                nudgeValue = minutesInstances.groupValues[1].toInt()
+                                commonLogger.info { "Input nudge value parsed as $nudgeValue minutes..." }
+                            } else if (hoursInstances != null) {
+                                nudgeValue = (hoursInstances.groupValues[1].toDouble() * 60).toInt()
+                                commonLogger.info { "Input nudge value parsed as $nudgeValue minutes (converted from hours)..." }
+                            } else if (daysInstances != null) {
+                                nudgeValue = daysInstances.groupValues[1].toInt() * 24 * 60
+                                commonLogger.info { "Input nudge value parsed as $nudgeValue minutes (converted from days)..." }
+                            } else {
+                                val parsedTimestamp = LocalDateTime.parse(txtFldValue, inputFormatRequired)
+                                timestampFormattedForOutput = outputFormatDesired.format {
+                                    with(TimeZone.currentSystemDefault()) {
+                                        setDateTime(
+                                            parsedTimestamp
+                                                .toInstant(TimeZone.currentSystemDefault())
+                                                .toLocalDateTime()
+                                        )
+                                        setOffset(offsetAt(parsedTimestamp.toInstant(TimeZone.currentSystemDefault())))
+                                    }
+                                }
+                                if (Instant.parse(timestampFormattedForOutput) >= Clock.System.now())
+                                    commonLogger.info { "Input timestamp parsed as $timestampFormattedForOutput..." }
+                                else
+                                    throw Exception("Time provided is in the past.")
+                            }
+                            txtFldColorState = true
+                        } catch(e: Exception) {
+                            txtFldColorState = false
+                            timestampFormattedForOutput = ""
+                            commonLogger.error { e.message }
+                        }
+                    },
+                    addButtonClick = {
+                        if (timestampFormattedForOutput.isNotBlank()) {
                             scope.launch {
                                 withContext(Dispatchers.IO) {
                                     try {
                                         val message = client
-                                            .post("$url/schedule?timestamp=$nudgedTimestamp")
+                                            .post("$url/schedule?timestamp=$timestampFormattedForOutput")
+                                            .bodyAsText()
+                                        commonLogger.info { message }
+                                    } catch (e: Exception) {
+                                        commonLogger.error { e.message }
+                                    }
+                                }
+                            }
+                        } else if (nudgeValue != 0) {
+                            val nudgedTimestamp = Clock.System.now()
+                                .plus(nudgeValue, DateTimeUnit.MINUTE)
+                                .toLocalDateTime(TimeZone.currentSystemDefault())
+                            val newTimestamp = outputFormatDesired.format {
+                                with(TimeZone.currentSystemDefault()) {
+                                    setDateTime(nudgedTimestamp)
+                                    setOffset(
+                                        offsetAt(
+                                            nudgedTimestamp.toInstant(
+                                                TimeZone.currentSystemDefault()
+                                            )
+                                        )
+                                    )
+                                }
+                            }
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    try {
+                                        val message = client
+                                            .post("$url/schedule?timestamp=$newTimestamp")
                                             .bodyAsText()
                                         commonLogger.info { message }
                                     } catch (e: Exception) {
@@ -155,57 +277,62 @@ fun App() {
                                 }
                             }
                         } else {
-                            scheduledAlertsThatAreChecked.keys.forEach { timestamp ->
-                                val outputFormat = DateTimeComponents.Format {
-                                    date(LocalDate.Formats.ISO)
-                                    char('T')
-                                    hour(); char(':'); minute(); char(':'); second()
-                                    offset(UtcOffset.Formats.ISO)
-                                }
-                                try {
-                                    scope.launch {
-                                        withContext(Dispatchers.IO) {
-                                            try {
-                                                val message = client
-                                                    .post("$url/delete?timestamp=$timestamp")
-                                                    .bodyAsText()
-                                                commonLogger.info { message }
-                                            } catch (e: Exception) {
-                                                commonLogger.error { e.message }
+                            commonLogger.warn { "Format requested is not supported." }
+                        }
+                    },
+                    nudgeButtonClick = {
+                        if(nudgeValue != 0) {
+                            val selectedScheduledAlerts = scheduledAlerts.filterValues { it }
+                            if (selectedScheduledAlerts.isNotEmpty()) {
+                                selectedScheduledAlerts.keys.forEach { oldTimestamp ->
+                                    try {
+                                        scope.launch {
+                                            withContext(Dispatchers.IO) {
+                                                try {
+                                                    val message = client
+                                                        .post("$url/delete?timestamp=$oldTimestamp")
+                                                        .bodyAsText()
+                                                    commonLogger.info { message }
+                                                } catch (e: Exception) {
+                                                    commonLogger.error { e.message }
+                                                }
                                             }
                                         }
-                                    }
-                                    val nudgedTimestamp = Instant.parse(timestamp)
-                                        .plus(minutes, DateTimeUnit.MINUTE)
-                                        .toLocalDateTime(TimeZone.currentSystemDefault())
-                                    val outputFormatted = outputFormat.format {
-                                        with(TimeZone.currentSystemDefault()) {
-                                            setDateTime(nudgedTimestamp)
-                                            setOffset(
-                                                offsetAt(
-                                                    nudgedTimestamp.toInstant(
-                                                        TimeZone.currentSystemDefault()
+                                        val nudgedTimestamp = Instant.parse(oldTimestamp)
+                                            .plus(nudgeValue, DateTimeUnit.MINUTE)
+                                            .toLocalDateTime(TimeZone.currentSystemDefault())
+                                        val newTimestamp = outputFormatDesired.format {
+                                            with(TimeZone.currentSystemDefault()) {
+                                                setDateTime(nudgedTimestamp)
+                                                setOffset(
+                                                    offsetAt(
+                                                        nudgedTimestamp.toInstant(
+                                                            TimeZone.currentSystemDefault()
+                                                        )
                                                     )
                                                 )
-                                            )
-                                        }
-                                    }
-                                    scope.launch {
-                                        withContext(Dispatchers.IO) {
-                                            try {
-                                                val message = client
-                                                    .post("$url/schedule?timestamp=$outputFormatted")
-                                                    .bodyAsText()
-                                                scheduledAlerts["$outputFormatted"] = true
-                                                commonLogger.info { message }
-                                            } catch (e: Exception) {
-                                                commonLogger.error { e.message }
                                             }
                                         }
+                                        scope.launch {
+                                            withContext(Dispatchers.IO) {
+                                                try {
+                                                    val message = client
+                                                        .post("$url/schedule?timestamp=$newTimestamp")
+                                                        .bodyAsText()
+                                                    scheduledAlerts[newTimestamp] =
+                                                        true
+                                                    commonLogger.info { message }
+                                                } catch (e: Exception) {
+                                                    commonLogger.error { e.message }
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        commonLogger.error { e.message }
                                     }
-                                } catch (e: Exception) {
-                                    commonLogger.error { e.message }
                                 }
+                            } else {
+                                commonLogger.warn { "No schedules are selected for nudging." }
                             }
                         }
                     },
@@ -226,6 +353,50 @@ fun App() {
                                     }
                                 }
                             }
+                    },
+                    snoozeButtonClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    val message = client.post("$url/off").bodyAsText()
+                                    commonLogger.info { message }
+                                } catch (e: Exception) {
+                                    commonLogger.error { e.message }
+                                }
+                            }
+                        }
+                        txtFldValue = "5m"
+                        txtFldColorState = true
+                        val minutesInstances = nudgeMinutesRegex.matchEntire(txtFldValue)
+                        nudgeValue = minutesInstances!!.groupValues[1].toInt()
+                        commonLogger.info { "Input nudge value parsed as $nudgeValue minutes..." }
+                        val nudgedTimestamp = Clock.System.now()
+                            .plus(nudgeValue, DateTimeUnit.MINUTE)
+                            .toLocalDateTime(TimeZone.currentSystemDefault())
+                        val newTimestamp = outputFormatDesired.format {
+                            with(TimeZone.currentSystemDefault()) {
+                                setDateTime(nudgedTimestamp)
+                                setOffset(
+                                    offsetAt(
+                                        nudgedTimestamp.toInstant(
+                                            TimeZone.currentSystemDefault()
+                                        )
+                                    )
+                                )
+                            }
+                        }
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    val message = client
+                                        .post("$url/schedule?timestamp=$newTimestamp")
+                                        .bodyAsText()
+                                    commonLogger.info { message }
+                                } catch (e: Exception) {
+                                    commonLogger.error { e.message }
+                                }
+                            }
+                        }
                     }
                 )
             }
@@ -238,111 +409,41 @@ private fun Dashboard(
     modifier: Modifier = Modifier,
     scope: CoroutineScope,
     client: HttpClient,
-    nudgeButtonClick: (Int) -> Unit,
-    deleteButtonClick: () -> Unit
+    txtFldValue: String,
+    txtFldColorState: Boolean,
+    onValueChange: (String) -> Unit,
+    addButtonClick: () -> Unit,
+    nudgeButtonClick: () -> Unit,
+    deleteButtonClick: () -> Unit,
+    snoozeButtonClick: () -> Unit
 ) {
     Column(modifier = modifier) {
-
-        var timestampAsNudge by rememberSaveable { mutableStateOf(0) }
-
         Row(
             modifier = Modifier
                 .weight(1f)
                 .padding(bottom = 5.dp),
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-
-            var textFieldTimestampValue by rememberSaveable { mutableStateOf("") }
-            var outputFormatted by rememberSaveable { mutableStateOf("") }
-            var color by rememberSaveable { mutableStateOf(Color.White) }
-            val nudgeMinutesRegex = Regex("""([-+]?\d+) ?[mM]""")
-            val nudgeHoursRegex = Regex("""([-+]?\d+\.?\d*+) ?[hH]""")
-            val inputFormat = LocalDateTime.Format {
-                monthNumber(padding = Padding.NONE)
-                char('/')
-                dayOfMonth(padding = Padding.NONE)
-                char('/')
-                yearTwoDigits(2000)
-                char(' ')
-                hour();
-                char(':');
-                minute()
-            }
-
-            val outputFormat = DateTimeComponents.Format {
-                date(LocalDate.Formats.ISO)
-                char('T')
-                hour(); char(':'); minute(); char(':'); second()
-                offset(UtcOffset.Formats.ISO)
-            }
-
             TextField(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .padding(5.dp)
-                    .background(color),
+                    .padding(5.dp),
                 singleLine = true,
                 textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.End),
-                value = textFieldTimestampValue,
-                onValueChange = {
-                    outputFormatted = ""
-                    timestampAsNudge = 0
-                    textFieldTimestampValue = it
-                    try {
-                        val minutesInstances = nudgeMinutesRegex.matchEntire(textFieldTimestampValue)
-                        val hoursInstances = nudgeHoursRegex.matchEntire(textFieldTimestampValue)
-                        if (minutesInstances != null) {
-                            timestampAsNudge = minutesInstances.groupValues[1].toInt()
-                            commonLogger.info { "Parsed $timestampAsNudge minutes..." }
-                        } else if (hoursInstances != null) {
-                            timestampAsNudge = (hoursInstances.groupValues[1].toDouble() * 60).toInt()
-                            commonLogger.info { "Parsed $timestampAsNudge minutes (converted from hours)..." }
-                        } else {
-                            val parsed = LocalDateTime.parse(textFieldTimestampValue, inputFormat)
-                            outputFormatted = outputFormat.format {
-                                with(TimeZone.currentSystemDefault()) {
-                                    setDateTime(parsed
-                                        .toInstant(TimeZone.currentSystemDefault())
-                                        .toLocalDateTime()
-                                    )
-                                    setOffset(offsetAt(parsed.toInstant(TimeZone.currentSystemDefault())))
-                                }
-                            }
-                            commonLogger.info { "Parsed outputFormatted as $outputFormatted..." }
-                        }
-                        color = Color.Green
-                    } catch(e: Exception) {
-                        color = Color.Red
-                        commonLogger.error { e.message }
-                    }
-                }
+                value = txtFldValue,
+                colors = TextFieldDefaults.textFieldColors(
+                    if (txtFldColorState) MaterialTheme.colors.primary else Color.Red
+                ),
+                onValueChange = { onValueChange(it) }
             )
             Button(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
                     .padding(5.dp),
-                onClick = {
-                    if (outputFormatted.isNotBlank()) {
-                        scope.launch {
-                            withContext(Dispatchers.IO) {
-                                try {
-                                    val message = client
-                                        .post("$url/schedule?timestamp=$outputFormatted")
-                                        .bodyAsText()
-                                    commonLogger.info { message }
-                                } catch (e: Exception) {
-                                    commonLogger.error { e.message }
-                                }
-                            }
-                        }
-                    } else
-                        commonLogger.warn { "outputFormatted is blank!" }
-                }
-            ) {
-                Text("Add")
-            }
+                onClick = addButtonClick
+            ) { Text("Add") }
         }
         Row(
             modifier = Modifier
@@ -355,15 +456,8 @@ private fun Dashboard(
                     .weight(1f)
                     .fillMaxHeight()
                     .padding(5.dp),
-                onClick = {
-                    if (timestampAsNudge != 0)
-                        nudgeButtonClick(timestampAsNudge)
-                    else
-                        commonLogger.warn { "timestampAsNudge is blank!" }
-                }
-            ) {
-                Text("Nudge")
-            }
+                onClick = nudgeButtonClick
+            ) { Text("Nudge") }
             Button(
                 modifier = Modifier
                     .weight(1f)
@@ -381,9 +475,7 @@ private fun Dashboard(
                         }
                     }
                 }
-            ) {
-                Text("Stop")
-            }
+            ) { Text("Stop") }
         }
         Row(
             modifier = Modifier
@@ -397,34 +489,14 @@ private fun Dashboard(
                     .fillMaxHeight()
                     .padding(5.dp),
                 onClick = deleteButtonClick
-            ) {
-                Text("Delete")
-            }
+            ) { Text("Delete") }
             Button(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
                     .padding(5.dp),
-                onClick = {
-                    /*scope.launch {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val expResponse =
-                                    client.post("http://$server:$port/exp?seconds=60")
-                                statusMessage = expResponse.bodyAsText()
-                                println(statusMessage)
-                                val onResponse = client.post("http://$server:$port/on")
-                                statusMessage = onResponse.bodyAsText()
-                                println(statusMessage)
-                            } catch (e: Exception) {
-                                statusMessage = "Error: ".plus(e.message.toString())
-                            }
-                        }
-                    }*/
-                }
-            ) {
-                Text("Snooze")
-            }
+                onClick = snoozeButtonClick
+            ) { Text("Snooze") }
         }
     }
 }
@@ -436,12 +508,14 @@ private fun ScheduledAlerts(
     onCheckedChange: (String, Boolean) -> Unit
 ) {
     Column(modifier = modifier) {
-        scheduledAlerts.forEach {
-            ScheduledAlert(
-                timestamp = it.key,
-                checked = it.value,
-                onCheckedChange = onCheckedChange
-            )
+        scheduledAlerts.keys.sorted().forEach { timestamp ->
+            scheduledAlerts[timestamp]?.let {
+                ScheduledAlert(
+                    timestamp = timestamp,
+                    checked = it,
+                    onCheckedChange = onCheckedChange
+                )
+            }
         }
     }
 }
@@ -461,7 +535,12 @@ private fun ScheduledAlert(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 15.dp),
-            text = timestamp
+            text = timestamp,
+            color = if (Instant.parse(timestamp) < Clock.System.now()) {
+                MaterialTheme.colors.secondary
+            } else {
+                MaterialTheme.colors.primary
+            }
         )
         Checkbox(
             checked = checked,
