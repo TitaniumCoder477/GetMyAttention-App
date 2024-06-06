@@ -34,26 +34,40 @@ import androidx.compose.ui.unit.dp
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
+import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
+import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.datetime.Clock
 import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.UtcOffset
 import kotlinx.datetime.format
+import kotlinx.datetime.format.DateTimeComponents
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
+import kotlinx.datetime.format.format
+import kotlinx.datetime.offsetAt
 import kotlinx.datetime.plus
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.json.Json
 
-const val server = "wil-gma-srv"
+//const val server = "wil-gma-srv"
+//const val port = "5000"
+
+const val server = "127.0.0.1"
 const val port = "5000"
+const val url = "http://$server:$port"
 
 val commonLogger = KotlinLogging.logger {}
 
@@ -67,19 +81,33 @@ fun App() {
         var statusMessage by remember { mutableStateOf("") }
         val scheduledAlerts = remember { mutableStateMapOf<String, Boolean>() }
 
-        val client = HttpClient(CIO)
-        val scope = rememberCoroutineScope()
+        val client = HttpClient(CIO) {
+            install(ContentNegotiation) {
+                json()
+            }
+        }
 
+        val scope = rememberCoroutineScope()
         scope.launch {
             withContext(Dispatchers.IO) {
                 while (true) {
                     try {
-                        val onResponse = client.get("http://$server:$port/state")
-                        statusMessage = onResponse.bodyAsText()
-                        println(statusMessage)
-                        delay(5000)
+                        val response = client.get("$url/schedules")
+                        val jsonString = response.bodyAsText()
+                        val jsonMap = Json.decodeFromString<Map<String, List<String>>>(jsonString)
+                        jsonMap["schedules"]?.forEach { value ->
+                            if (!scheduledAlerts.contains(value)) {
+                                scheduledAlerts[value] = false
+                            }
+                        }
+                        scheduledAlerts.forEach {
+                            if (jsonMap["schedules"]?.contains(it.key) == false) {
+                                scheduledAlerts.remove(it.key)
+                            }
+                        }
+                        delay(1000)
                     } catch(e: Exception) {
-                        statusMessage = "Error: ".plus(e.message.toString())
+                        commonLogger.error { e.message }
                     }
                 }
             }
@@ -106,13 +134,27 @@ fun App() {
                         .padding(start = 5.dp, top = 5.dp, end = 5.dp),
                     scope = scope,
                     client = client,
-                    addButtonClick = { timestamp ->
-                        scheduledAlerts[timestamp] = false
-                    },
                     nudgeButtonClick = { minutes ->
-                        scheduledAlerts
-                            .filterValues { it }
-                            .forEach { checkedItem ->
+                        val checkedScheduledAlerts = scheduledAlerts.filterValues { it }
+                        if (checkedScheduledAlerts.isEmpty()) {
+                            val newTimestamp = Clock.System.now()
+                                .plus(minutes, DateTimeUnit.MINUTE)
+                                .toLocalDateTime(TimeZone.currentSystemDefault())
+                                .format(LocalDateTime.Formats.ISO)
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    try {
+                                        val message = client
+                                            .post("$url/schedule?timestamp=$newTimestamp")
+                                            .bodyAsText()
+                                        commonLogger.info { message }
+                                    } catch (e: Exception) {
+                                        commonLogger.error { e.message }
+                                    }
+                                }
+                            }
+                        } else {
+                            checkedScheduledAlerts.forEach { checkedItem ->
                                 val newTimestamp = LocalDateTime.parse(checkedItem.key)
                                     .toInstant(TimeZone.currentSystemDefault())
                                     .plus(minutes, DateTimeUnit.MINUTE)
@@ -121,11 +163,25 @@ fun App() {
                                 scheduledAlerts[newTimestamp] = true
                                 scheduledAlerts.remove(checkedItem.key)
                             }
+                        }
                     },
                     deleteButtonClick = {
                         scheduledAlerts
                             .filterValues { it }
-                            .forEach { checkedItem -> scheduledAlerts.remove(checkedItem.key) }
+                            .forEach { checkedItem ->
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        try {
+                                            val message = client
+                                                .post("$url/delete?timestamp=${checkedItem.key}")
+                                                .bodyAsText()
+                                            commonLogger.info { message }
+                                        } catch (e: Exception) {
+                                            commonLogger.error { e.message }
+                                        }
+                                    }
+                                }
+                            }
                     }
                 )
             }
@@ -134,18 +190,10 @@ fun App() {
 }
 
 @Composable
-private fun TimestampTextBox(
-    modifier: Modifier = Modifier
-) {
-
-}
-
-@Composable
 private fun Dashboard(
     modifier: Modifier = Modifier,
     scope: CoroutineScope,
     client: HttpClient,
-    addButtonClick: (String) -> Unit,
     nudgeButtonClick: (Int) -> Unit,
     deleteButtonClick: () -> Unit
 ) {
@@ -160,12 +208,12 @@ private fun Dashboard(
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
 
-            var timestamp by rememberSaveable { mutableStateOf("") }
-            var timestampAsISO by rememberSaveable { mutableStateOf("") }
+            var textFieldTimestampValue by rememberSaveable { mutableStateOf("") }
+            var outputFormatted by rememberSaveable { mutableStateOf("") }
             var color by rememberSaveable { mutableStateOf(Color.White) }
             val nudgeMinutesRegex = Regex("""([-+]?\d+) ?[mM]""")
             val nudgeHoursRegex = Regex("""([-+]?\d+\.?\d*+) ?[hH]""")
-            val dateTimeFormat = LocalDateTime.Format {
+            val inputFormat = LocalDateTime.Format {
                 monthNumber(padding = Padding.NONE)
                 char('/')
                 dayOfMonth(padding = Padding.NONE)
@@ -177,6 +225,13 @@ private fun Dashboard(
                 minute()
             }
 
+            val outputFormat = DateTimeComponents.Format {
+                date(LocalDate.Formats.ISO)
+                char('T')
+                hour(); char(':'); minute(); char(':'); second()
+                offset(UtcOffset.Formats.ISO)
+            }
+
             TextField(
                 modifier = Modifier
                     .weight(1f)
@@ -185,29 +240,37 @@ private fun Dashboard(
                     .background(color),
                 singleLine = true,
                 textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.End),
-                value = timestamp,
+                value = textFieldTimestampValue,
                 onValueChange = {
-                    timestampAsISO = ""
+                    outputFormatted = ""
                     timestampAsNudge = 0
-                    timestamp = it
+                    textFieldTimestampValue = it
                     try {
-                        val minutesInstances = nudgeMinutesRegex.matchEntire(timestamp)
-                        val hoursInstances = nudgeHoursRegex.matchEntire(timestamp)
+                        val minutesInstances = nudgeMinutesRegex.matchEntire(textFieldTimestampValue)
+                        val hoursInstances = nudgeHoursRegex.matchEntire(textFieldTimestampValue)
                         if (minutesInstances != null) {
                             timestampAsNudge = minutesInstances.groupValues[1].toInt()
-                            commonLogger.info { "INFO: Parsed $timestampAsNudge minutes..." }
+                            commonLogger.info { "Parsed $timestampAsNudge minutes..." }
                         } else if (hoursInstances != null) {
                             timestampAsNudge = (hoursInstances.groupValues[1].toDouble() * 60).toInt()
-                            commonLogger.info { "INFO: Parsed $timestampAsNudge minutes (converted from hours)..." }
+                            commonLogger.info { "Parsed $timestampAsNudge minutes (converted from hours)..." }
                         } else {
-                            val parsed = LocalDateTime.parse(timestamp, dateTimeFormat)
-                            timestampAsISO = parsed.format(LocalDateTime.Formats.ISO)
-                            commonLogger.info { "INFO: Parsed timestamp $timestampAsISO..." }
+                            val parsed = LocalDateTime.parse(textFieldTimestampValue, inputFormat)
+                            outputFormatted = outputFormat.format {
+                                with(TimeZone.currentSystemDefault()) {
+                                    setDateTime(parsed
+                                        .toInstant(TimeZone.currentSystemDefault())
+                                        .toLocalDateTime()
+                                    )
+                                    setOffset(offsetAt(parsed.toInstant(TimeZone.currentSystemDefault())))
+                                }
+                            }
+                            commonLogger.info { "Parsed outputFormatted as $outputFormatted..." }
                         }
                         color = Color.Green
                     } catch(e: Exception) {
                         color = Color.Red
-                        println("ERROR: ${e.message}")
+                        commonLogger.error { e.message }
                     }
                 }
             )
@@ -217,12 +280,21 @@ private fun Dashboard(
                     .fillMaxHeight()
                     .padding(5.dp),
                 onClick = {
-                    if (timestampAsISO.isNotBlank()) {
-                        commonLogger.info { "INFO: timestampAsISO = $timestampAsISO" }
-                        addButtonClick(timestampAsISO)
-                    } else {
-                        commonLogger.info { "INFO: timestampAsISO is blank!" }
-                    }
+                    if (outputFormatted.isNotBlank()) {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    val message = client
+                                        .post("$url/schedule?timestamp=$outputFormatted")
+                                        .bodyAsText()
+                                    commonLogger.info { message }
+                                } catch (e: Exception) {
+                                    commonLogger.error { e.message }
+                                }
+                            }
+                        }
+                    } else
+                        commonLogger.warn { "outputFormatted is blank!" }
                 }
             ) {
                 Text("Add")
@@ -240,12 +312,10 @@ private fun Dashboard(
                     .fillMaxHeight()
                     .padding(5.dp),
                 onClick = {
-                    if (timestampAsNudge != 0) {
-                        commonLogger.info { "INFO: timestampAsNudge = $timestampAsNudge" }
+                    if (timestampAsNudge != 0)
                         nudgeButtonClick(timestampAsNudge)
-                    } else {
-                        commonLogger.info { "INFO: timestampAsNudge is blank!" }
-                    }
+                    else
+                        commonLogger.warn { "timestampAsNudge is blank!" }
                 }
             ) {
                 Text("Nudge")
@@ -256,21 +326,16 @@ private fun Dashboard(
                     .fillMaxHeight()
                     .padding(5.dp),
                 onClick = {
-                   /* scope.launch {
+                    scope.launch {
                         withContext(Dispatchers.IO) {
                             try {
-                                val expResponse =
-                                    client.post("http://$server:$port/exp?seconds=60")
-                                statusMessage = expResponse.bodyAsText()
-                                println(statusMessage)
-                                val onResponse = client.post("http://$server:$port/on")
-                                statusMessage = onResponse.bodyAsText()
-                                println(statusMessage)
+                                val message = client.post("$url/off").bodyAsText()
+                                commonLogger.info { message }
                             } catch (e: Exception) {
-                                statusMessage = "Error: ".plus(e.message.toString())
+                                commonLogger.error { e.message }
                             }
                         }
-                    }*/
+                    }
                 }
             ) {
                 Text("Stop")
@@ -348,8 +413,6 @@ private fun ScheduledAlert(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        commonLogger.info { "INFO: text = $timestamp" }
-        commonLogger.info { "INFO: checked = $checked" }
         Text(
             modifier = Modifier
                 .weight(1f)

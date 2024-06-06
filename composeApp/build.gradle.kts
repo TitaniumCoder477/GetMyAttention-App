@@ -52,6 +52,8 @@ kotlin {
             implementation(libs.slf4j.api)
             implementation(libs.slf4j.simple)
             implementation(libs.kotlin.logging.jvm)
+            implementation(libs.ktor.client.content.negotiation)
+            implementation(libs.ktor.serialization.kotlinx.json)
         }
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
@@ -92,6 +94,9 @@ android {
         debugImplementation(libs.compose.ui.tooling)
         implementation(libs.kotlinx.coroutines.android)
     }
+}
+dependencies {
+    implementation(libs.androidx.core.i18n)
 }
 
 compose.desktop {
