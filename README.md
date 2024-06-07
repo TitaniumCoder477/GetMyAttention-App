@@ -11,6 +11,10 @@
 
 > The Kotlin app component of the GetMyAttention system
 
+## System diagram
+
+<img src="System Architecture.drawio.png" alt="System architecture diagram" width="707" height="267">
+
 ## What is the project?
 
 The GetMyAttention App is a Kotlin Multiplatform app that facilitates simple commands to the GetMyAttention Node via the GetMyAttention Server. Current multiplatform targets are Android and Desktop.
