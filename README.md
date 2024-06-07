@@ -9,7 +9,7 @@
   </a>
 </p>
 
-> The Kotlin app component of the GetMyAttention system
+> The Kotlin Multiplatform app (client) component of the GetMyAttention system
 
 ## System diagram
 
