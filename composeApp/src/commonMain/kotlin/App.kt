@@ -59,17 +59,11 @@ import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
 
-//const val server = "wil-gma-srv"
-//const val port = "5000"
-
-const val server = "127.0.0.1"
+const val server = "wil-gma-srv"
 const val port = "5000"
 const val url = "http://$server:$port"
 
 val commonLogger = KotlinLogging.logger {}
-
-
-//val logger = KotlinLogging.logger {}
 
 @Composable
 fun App() {
@@ -79,7 +73,6 @@ fun App() {
             primary = Color(0xFFBF5700)
         )
     ) {
-        var statusMessage by remember { mutableStateOf("") }
         val scheduledAlerts = remember { mutableStateMapOf<String, Boolean>() }
 
         val client = HttpClient(CIO) {
@@ -165,6 +158,8 @@ fun App() {
                 val nudgeMinutesRegex = Regex("""([-+]?\d+) ?[mM]""")
                 val nudgeHoursRegex = Regex("""([-+]?\d+\.?\d*+) ?[hH]""")
                 val nudgeDaysRegex = Regex("""([-+]?\d+) ?[dD]""")
+                val timeShorthandRegex = Regex("""(\d{1,2}:?\d{0,2}[aA]|[pP][mM])""")
+                val militaryTimeShorthandRegex = Regex("""(\d{1,2}:?\d{0,2})""")
                 val inputFormatRequired = LocalDateTime.Format {
                     monthNumber(padding = Padding.NONE)
                     char('/')
@@ -201,6 +196,8 @@ fun App() {
                             val minutesInstances = nudgeMinutesRegex.matchEntire(txtFldValue)
                             val hoursInstances = nudgeHoursRegex.matchEntire(txtFldValue)
                             val daysInstances = nudgeDaysRegex.matchEntire(txtFldValue)
+                            val timeShorthandInstances = timeShorthandRegex.matchEntire(txtFldValue)
+                            val militaryTimeShorthandInstances = militaryTimeShorthandRegex.matchEntire(txtFldValue)
                             if (minutesInstances != null) {
                                 nudgeValue = minutesInstances.groupValues[1].toInt()
                                 commonLogger.info { "Input nudge value parsed as $nudgeValue minutes..." }
@@ -210,6 +207,10 @@ fun App() {
                             } else if (daysInstances != null) {
                                 nudgeValue = daysInstances.groupValues[1].toInt() * 24 * 60
                                 commonLogger.info { "Input nudge value parsed as $nudgeValue minutes (converted from days)..." }
+                            } else if (timeShorthandInstances != null) {
+                                //TODO: Handle 1am 1:30am 1pm 1:30pm etc for same day or next
+                            } else if (militaryTimeShorthandInstances != null) {
+                                //TODO: Handle 01:00 01:30 13:00 13:30 etc for same day or next
                             } else {
                                 val parsedTimestamp = LocalDateTime.parse(txtFldValue, inputFormatRequired)
                                 timestampFormattedForOutput = outputFormatDesired.format {

@@ -6,7 +6,7 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import getmyattention_app.composeapp.generated.resources.Res
-import getmyattention_app.composeapp.generated.resources.icon2
+import getmyattention_app.composeapp.generated.resources.icon1
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.jetbrains.compose.resources.ExperimentalResourceApi
 import org.jetbrains.compose.resources.painterResource
@@ -22,7 +22,7 @@ fun main() = application {
         onCloseRequest = ::exitApplication,
         title = "GetMyAttention App",
         state = state,
-        icon = painterResource(Res.drawable.icon2)
+        icon = painterResource(Res.drawable.icon1)
     ) {
         logger.info { "Test" }
         App()

@@ -51,7 +51,7 @@ kotlin {
             implementation(libs.kotlin.logging)
             implementation(libs.slf4j.api)
             implementation(libs.slf4j.simple)
-            implementation(libs.kotlin.logging.jvm)
+            //implementation(libs.kotlin.logging.jvm)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
         }
