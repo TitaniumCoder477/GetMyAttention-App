@@ -1,4 +1,4 @@
-<h1 align="center">Welcome to GetMyAttention-App 👋</h1>
+<h1>Welcome to GetMyAttention-App 👋</h1>
 <p>
   <img alt="Version" src="https://img.shields.io/badge/version-0.1-blue.svg?cacheSeconds=2592000" />
   <a href="#" target="_blank">
@@ -21,14 +21,15 @@ The GetMyAttention App is a Kotlin Multiplatform app that facilitates simple com
 
 ## What is the MVP?
 
-* Submit on/off commands to the server
-* Provide date/time picker
-* Submit date/time to the server
-* View list of future schedules
-* Cancel a schedule
+* Submit date/time schedules to the server DONE
+* View list of future schedules DONE
+* Delete schedule(s) DONE
 
 ## What are the nice to haves?
 
+* Nudge schedule(s) that are selected by a desired amount of minutes or hours DONE
+* Stop alerts DONE
+* Snooze an alert (i.e. stop all alerts and schedule an alert for 5 minutes out) DONE
 * Reboot the server and node
 * View a list of nodes
 * View a list of nodes' behaviors
