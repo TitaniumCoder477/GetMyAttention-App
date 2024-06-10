@@ -45,23 +45,23 @@ Here are some screenshots of the app:
 
 Figure 1: Android app icon
 
-<img src="Screenshot_20240610-092807_crDroid Home.jpg" alt="Android app icon" width="30%">
+<img src="Screenshot_20240610-092807_crDroid Home.png" alt="Android app icon" width="30%">
 
 Figure 2: Android app showing three scheduled notifications
 
-<img src="Screenshot_20240610-092311_GetMyAttention App.jpg" alt="Three scheduled notifications" width="30%">
+<img src="Screenshot_20240610-092311_GetMyAttention App.png" alt="Three scheduled notifications" width="30%">
 
 Figure 3: Android app showing use of time value instead of timestamp
 
-<img src="Screenshot_20240610-092244_GetMyAttention App.jpg" alt="Time value notification" width="30%">
+<img src="Screenshot_20240610-092244_GetMyAttention App.png" alt="Time value notification" width="30%">
 
 Figure 4: Desktop app showing time value instead of timestamp
 
-<img src="2024-06-10_10-46_1.jpg" alt="Time value notification" width="30%">
+<img src="2024-06-10_10-46_1.png" alt="Time value notification" width="30%">
 
 Figure 5: Desktop app showing timestamp notification
 
-<img src="2024-06-10_10-46_2.jpg" alt="Timestamp notification" width="30%">
+<img src="2024-06-10_10-46_2.png" alt="Timestamp notification" width="30%">
 
 <div class="clearfix"></div>
 
